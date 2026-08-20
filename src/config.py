@@ -61,10 +61,13 @@ class Settings(BaseSettings):
     ews_autodiscover: bool = True
 
     # Authentication
-    ews_auth_type: Literal["oauth2", "basic", "ntlm"] = "oauth2"
+    ews_auth_type: Literal["oauth2", "o365devicecode", "basic", "ntlm"] = "oauth2"
     ews_client_id: Optional[str] = None
     ews_client_secret: Optional[str] = None
     ews_tenant_id: Optional[str] = None
+    ews_device_code_client_id: str = "9e5f94bc-e8a4-4e73-b8be-63364c29d753"
+    ews_device_code_authority: str = "https://login.microsoftonline.com/organizations"
+    ews_device_code_token_cache_path: str = "~/.cache/ews-mcp/msal-token-cache.json"
     ews_username: Optional[str] = None
     ews_password: Optional[str] = None
 
@@ -209,6 +212,13 @@ class Settings(BaseSettings):
         elif self.ews_auth_type in ("basic", "ntlm"):
             if not self.ews_username or not self.ews_password:
                 raise ValueError(f"{self.ews_auth_type.upper()} auth requires ews_username and ews_password")
+        elif self.ews_auth_type == "o365devicecode":
+            if not self.ews_device_code_client_id:
+                raise ValueError("O365 device-code auth requires ews_device_code_client_id")
+            if not self.ews_device_code_authority:
+                raise ValueError("O365 device-code auth requires ews_device_code_authority")
+            if not self.ews_device_code_token_cache_path:
+                raise ValueError("O365 device-code auth requires ews_device_code_token_cache_path")
 
         # SSE transport binding safety: require API key if not loopback.
         if self.mcp_transport == "sse":
