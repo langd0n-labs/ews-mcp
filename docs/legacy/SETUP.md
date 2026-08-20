@@ -177,6 +177,26 @@ EWS_CLIENT_SECRET=<your-client-secret>
 EWS_TENANT_ID=<your-tenant-id>
 ```
 
+### O365 Device-Code Authentication
+
+Use device-code authentication for unattended or headless deployments. The
+first startup prints a Microsoft verification URL and user code. Complete the
+sign-in on another device; later startups reuse the cached token silently.
+`EWS_DEVICE_CODE_CLIENT_ID` has no default; you must set it to a client ID
+your Microsoft tenant already accepts.
+
+```bash
+EWS_AUTH_TYPE=o365devicecode
+EWS_DEVICE_CODE_CLIENT_ID=9e5f94bc-e8a4-4e73-b8be-63364c29d753
+EWS_DEVICE_CODE_AUTHORITY=https://login.microsoftonline.com/organizations
+EWS_DEVICE_CODE_TOKEN_CACHE_PATH=~/.cache/ews-mcp/msal-token-cache.json
+```
+
+The token-cache file contains refresh-token material. The server creates it
+with owner-only (`0600`) permissions and reapplies those permissions when it
+writes the file. Keep the path out of version control and protect or back it
+up using the deployment's own secret-management process.
+
 ### Basic Authentication Setup (On-Premises Exchange)
 
 Update your `.env` file:

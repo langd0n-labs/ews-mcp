@@ -451,6 +451,7 @@ unless-stopped` covers crashes.
 | Method | Production fit | Notes |
 |---|---|---|
 | `oauth2` | Office 365 production (recommended) | Requires Azure AD app with `EWS.AccessAsUser.All` (delegate) or full impersonation scope. Token refresh handled by `msal`. |
+| `o365devicecode` | Headless Office 365 production | Uses MSAL device-code authentication with a configurable owner-only token cache. |
 | `basic` | Internal Exchange or O365 with basic enabled | Username + password. Plan to migrate off; basic auth is being deprecated by Microsoft. |
 | `ntlm` | Corporate Exchange behind ADFS | `DOMAIN\user` username. Uses `requests-ntlm`. |
 
