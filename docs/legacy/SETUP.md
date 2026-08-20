@@ -182,6 +182,8 @@ EWS_TENANT_ID=<your-tenant-id>
 Use device-code authentication for unattended or headless deployments. The
 first startup prints a Microsoft verification URL and user code. Complete the
 sign-in on another device; later startups reuse the cached token silently.
+`EWS_DEVICE_CODE_CLIENT_ID` has no default; you must set it to a client ID
+your Microsoft tenant already accepts.
 
 ```bash
 EWS_AUTH_TYPE=o365devicecode

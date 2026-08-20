@@ -50,7 +50,7 @@ def make_credentials(monkeypatch, tmp_path, results, accounts):
 def test_uses_device_flow_when_no_cached_account(monkeypatch, tmp_path, capsys):
     credentials, app = make_credentials(monkeypatch, tmp_path, [], [])
 
-    assert credentials.access_token == "value"
+    assert credentials.access_token["access_token"] == "value"
     assert app.device_calls == 1
     assert "https://example.test" in capsys.readouterr().out
     assert (tmp_path / "cache.json").stat().st_mode & 0o777 == 0o600
@@ -67,5 +67,5 @@ def test_refresh_uses_cached_account_without_device_prompt(monkeypatch, tmp_path
     assert app.silent_calls == 1
     assert app.device_calls == 0
     app.results = iter([{"access_token": "value"}])
-    assert credentials.refresh() == "value"
+    assert credentials.refresh()["access_token"] == "value"
     assert app.silent_calls == 2

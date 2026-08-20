@@ -10,6 +10,7 @@ from exchangelib import (
     OAuth2Credentials,
     NTLM,
 )
+from oauthlib.oauth2 import OAuth2Token
 
 from .config import Settings
 from .exceptions import AuthenticationError
@@ -50,7 +51,9 @@ class O365DeviceCodeCredentials(OAuth2AuthorizationCodeCredentials):
             error = result.get("error_description") or result.get("error") or "no access token returned"
             raise AuthenticationError(f"Device-code OAuth authentication failed: {error}")
         self._persist_cache()
-        return result["access_token"]
+        # exchangelib requires an oauthlib OAuth2Token, not a bare string --
+        # MSAL's result dict already has the shape OAuth2Token expects.
+        return OAuth2Token(result)
 
     def _persist_cache(self) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,7 +75,7 @@ class O365DeviceCodeCredentials(OAuth2AuthorizationCodeCredentials):
         if not result or "access_token" not in result:
             error = (result or {}).get("error_description") or "silent token refresh failed"
             raise AuthenticationError(f"Device-code OAuth refresh failed: {error}")
-        self.access_token = result["access_token"]
+        self.access_token = OAuth2Token(result)
         self._persist_cache()
         return self.access_token
 

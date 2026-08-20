@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     ews_client_id: Optional[str] = None
     ews_client_secret: Optional[str] = None
     ews_tenant_id: Optional[str] = None
-    ews_device_code_client_id: str = "9e5f94bc-e8a4-4e73-b8be-63364c29d753"
+    ews_device_code_client_id: Optional[str] = None
     ews_device_code_authority: str = "https://login.microsoftonline.com/organizations"
     ews_device_code_token_cache_path: str = "~/.cache/ews-mcp/msal-token-cache.json"
     ews_username: Optional[str] = None
