@@ -184,9 +184,21 @@ class EWSClient:
                     "Either provide EWS_SERVER_URL or enable EWS_AUTODISCOVER."
                 )
 
-            # Test the connection
-            _ = account.root.tree()
-            self.logger.info("Successfully connected to Exchange")
+            # Test the connection. account.root.tree() walks the full folder
+            # hierarchy, including non-IPM system folders some tenants
+            # restrict by policy -- that's a real error there, not evidence
+            # the account itself is unreachable. Downgrade it to a warning so
+            # a policy-blocked system folder doesn't fail startup for an
+            # account whose actual mail/calendar/contacts access is fine.
+            try:
+                _ = account.root.tree()
+                self.logger.info("Successfully connected to Exchange")
+            except Exception as tree_error:
+                self.logger.warning(
+                    f"Connected to Exchange, but the folder-tree connectivity "
+                    f"check failed (often a tenant policy restriction on a "
+                    f"system folder, not a real connectivity problem): {tree_error}"
+                )
 
             return account
 
