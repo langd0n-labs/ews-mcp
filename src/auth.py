@@ -66,7 +66,7 @@ class O365DeviceCodeCredentials(OAuth2AuthorizationCodeCredentials):
         self.cache_path.write_text(self.cache.serialize(), encoding="utf-8")
         os.chmod(self.cache_path, 0o600)
 
-    def refresh(self):
+    def refresh(self, session=None):
         """Refresh the access token silently using the cached account."""
         accounts = self.app.get_accounts()
         if not accounts:

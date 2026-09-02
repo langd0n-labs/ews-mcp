@@ -67,5 +67,5 @@ def test_refresh_uses_cached_account_without_device_prompt(monkeypatch, tmp_path
     assert app.silent_calls == 1
     assert app.device_calls == 0
     app.results = iter([{"access_token": "value"}])
-    assert credentials.refresh()["access_token"] == "value"
+    assert credentials.refresh(session=object())["access_token"] == "value"
     assert app.silent_calls == 2
