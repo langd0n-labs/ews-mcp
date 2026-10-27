@@ -30,7 +30,7 @@ from .utils import safe_json_dumps
 
 # Import all tool classes (67 total: 63 base + 4 optional AI)
 from .tools import (
-    CreateDraftTool, CreateReplyDraftTool, CreateForwardDraftTool,
+    CreateDraftTool, UpdateDraftTool, CreateReplyDraftTool, CreateForwardDraftTool,
     SendEmailTool, ReadEmailsTool, SearchEmailsTool, GetEmailDetailsTool, GetEmailsBulkTool,
     DeleteEmailTool, MoveEmailTool, UpdateEmailTool, CopyEmailTool,
     ReplyEmailTool, ForwardEmailTool,
@@ -719,6 +719,7 @@ class EWSMCPServer:
         if self.settings.enable_email:
             tool_classes.extend([
                 CreateDraftTool,
+                UpdateDraftTool,
                 CreateReplyDraftTool,
                 CreateForwardDraftTool,
                 SendEmailTool,

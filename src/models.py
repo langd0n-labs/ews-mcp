@@ -27,6 +27,7 @@ def _validate_loose_email(value: str) -> str:
     return stripped
 from typing import Optional, List, Literal
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from enum import Enum
 from pathlib import Path
 
@@ -141,7 +142,9 @@ class CreateAppointmentRequest(BaseModel):
     def validate_end_time(cls, v: datetime, info) -> datetime:
         """Validate end time is after start time."""
         start_time = info.data.get("start_time")
-        if start_time and v <= start_time:
+        end_instant = v.astimezone(ZoneInfo("UTC")) if v.tzinfo else v
+        start_instant = start_time.astimezone(ZoneInfo("UTC")) if start_time and start_time.tzinfo else start_time
+        if start_instant and end_instant <= start_instant:
             raise ValueError("end_time must be after start_time")
         return v
 

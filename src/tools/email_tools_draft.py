@@ -583,3 +583,67 @@ class CreateForwardDraftTool(BaseTool):
         except Exception as e:
             self.logger.error(f"Failed to create forward draft: {e}")
             raise ToolExecutionError(f"Failed to create forward draft: {e}")
+
+
+class UpdateDraftTool(BaseTool):
+    """Update only supplied fields on a saved, unsent message."""
+
+    def get_schema(self) -> Dict[str, Any]:
+        return {
+            "name": "update_draft",
+            "description": "Edit an existing draft in place without sending. Omitted fields, attachments and reply context are preserved. Empty recipient lists clear those recipients.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string", "description": "Replace the full draft body, including any quoted text"},
+                    "to": {"type": "array", "items": {"type": "string"}},
+                    "cc": {"type": "array", "items": {"type": "string"}},
+                    "bcc": {"type": "array", "items": {"type": "string"}},
+                    **BODY_FORMAT_SCHEMA,
+                    "target_mailbox": {"type": "string"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+        }
+
+    async def execute(self, **kwargs) -> Dict[str, Any]:
+        try:
+            if not kwargs.get("message_id"):
+                raise ToolExecutionError("message_id is required")
+            account = self.get_account(kwargs.get("target_mailbox"))
+            message = find_message_for_account(account, kwargs["message_id"])
+            if not isinstance(message, Message) or message.is_draft is not True or message.is_submitted or message.datetime_sent:
+                raise ToolExecutionError("Only an unsent draft message can be edited")
+            updates = {}
+            for field in ("subject", "body"):
+                if field in kwargs:
+                    if not isinstance(kwargs[field], str):
+                        raise ToolExecutionError(f"{field} must be a string")
+                    updates[field] = kwargs[field]
+            if "body" in updates:
+                body, _ = compose_body(updates["body"], kwargs.get("body_format", "html"))
+                updates["body"] = HTMLBody(body)
+            for key in ("to", "cc", "bcc"):
+                if key in kwargs:
+                    values = kwargs[key]
+                    if not isinstance(values, list) or any(not isinstance(v, str) or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", v) for v in values):
+                        raise ToolExecutionError(f"{key} must be a list of email addresses")
+                    updates[f"{key}_recipients"] = [Mailbox(email_address=v) for v in values]
+            if not updates:
+                raise ToolExecutionError("Supply subject, body, to, cc or bcc to update")
+            for field, value in updates.items():
+                setattr(message, field, value)
+            # Message.save uses SaveOnly. Limit UpdateItem to supplied fields.
+            message.save(update_fields=list(updates))
+            return format_success_response(
+                "Draft updated without sending",
+                message_id=ews_id_to_str(message.id),
+                mailbox=self.get_mailbox_info(kwargs.get("target_mailbox")),
+            )
+        except ToolExecutionError:
+            raise
+        except Exception as exc:
+            raise ToolExecutionError(f"Failed to update draft: {exc}") from exc
