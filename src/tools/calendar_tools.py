@@ -6,7 +6,10 @@ from datetime import datetime, timedelta
 from exchangelib import CalendarItem, Mailbox, Attendee, EWSTimeZone
 
 from .base import BaseTool
-from ..models import CreateAppointmentRequest, MeetingResponse
+from .calendar_selection import CALENDAR_ID_SCHEMA, select_calendar, verify_item_calendar
+from .calendar_support import (calendar_datetime, recurrence_from_input, calendar_metadata,
+                               TIMEZONE_SCHEMA, RECURRENCE_SCHEMA)
+from ..models import CreateAppointmentRequest, MeetingResponse, ShowAsRequest
 from ..exceptions import ToolExecutionError, ValidationError
 from ..utils import format_success_response, safe_get, parse_datetime_tz_aware, make_tz_aware, format_datetime, ews_id_to_str, attach_inline_files, INLINE_ATTACHMENTS_SCHEMA, get_timezone as get_configured_timezone
 
@@ -115,6 +118,13 @@ def summarize_availability(merged_free_busy, calendar_events):
     }
 
 
+SHOW_AS_SCHEMA = {
+    "type": "string",
+    "enum": ["Free", "Tentative", "Busy", "OOF", "WorkingElsewhere"],
+    "description": "Free/busy status shown for this event (Outlook 'Show as').",
+}
+
+
 class CreateAppointmentTool(BaseTool):
     """Tool for creating calendar appointments."""
 
@@ -125,6 +135,10 @@ class CreateAppointmentTool(BaseTool):
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "timezone": TIMEZONE_SCHEMA,
+                    "show_as": SHOW_AS_SCHEMA,
+                    "calendar_id": CALENDAR_ID_SCHEMA,
+                    "recurrence": RECURRENCE_SCHEMA,
                     "subject": {
                         "type": "string",
                         "description": "Appointment subject"
@@ -182,8 +196,8 @@ class CreateAppointmentTool(BaseTool):
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """Create calendar appointment."""
         # Parse datetime strings as timezone-aware
-        kwargs["start_time"] = parse_datetime_tz_aware(kwargs["start_time"])
-        kwargs["end_time"] = parse_datetime_tz_aware(kwargs["end_time"])
+        kwargs["start_time"] = calendar_datetime(kwargs["start_time"], kwargs.get("timezone"))
+        kwargs["end_time"] = calendar_datetime(kwargs["end_time"], kwargs.get("timezone"))
 
         # Validate input
         request = self.validate_input(CreateAppointmentRequest, **kwargs)
@@ -192,16 +206,23 @@ class CreateAppointmentTool(BaseTool):
             target_mailbox = kwargs.get("target_mailbox")
             account = self.get_account(target_mailbox)
             mailbox = self.get_mailbox_info(target_mailbox)
+            selected_calendar = select_calendar(account, kwargs)
 
             # Create calendar item
             item = CalendarItem(
                 account=account,
-                folder=account.calendar,
+                folder=selected_calendar,
                 subject=request.subject,
                 start=request.start_time,
                 end=request.end_time,
                 is_all_day=request.is_all_day
             )
+
+            if "recurrence" in kwargs:
+                item.recurrence = recurrence_from_input(kwargs["recurrence"])
+
+            if "show_as" in kwargs:
+                item.legacy_free_busy_status = request.show_as
 
             # Set optional fields
             if request.location:
@@ -242,7 +263,9 @@ class CreateAppointmentTool(BaseTool):
                 subject=request.subject,
                 start_time=request.start_time.isoformat(),
                 end_time=request.end_time.isoformat(),
-                mailbox=mailbox
+                mailbox=mailbox,
+                calendar_id=selected_calendar.id,
+                show_as=safe_get(item, "legacy_free_busy_status", None)
             )
 
         except Exception as e:
@@ -260,6 +283,7 @@ class GetCalendarTool(BaseTool):
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "calendar_id": CALENDAR_ID_SCHEMA,
                     "start_date": {
                         "type": "string",
                         "description": "Start date (ISO 8601 format, optional, defaults to today)"
@@ -295,6 +319,7 @@ class GetCalendarTool(BaseTool):
             target_mailbox = kwargs.get("target_mailbox")
             account = self.get_account(target_mailbox)
             mailbox = self.get_mailbox_info(target_mailbox)
+            selected_calendar = select_calendar(account, kwargs)
 
             # Parse dates as timezone-aware
             start_date = kwargs.get("start_date")
@@ -323,12 +348,14 @@ class GetCalendarTool(BaseTool):
             max_results = kwargs.get("max_results", 50)
 
             # Query calendar - use only() to fetch specific fields and avoid timezone parsing warnings
-            items = account.calendar.view(
+            items = selected_calendar.view(
                 start=start_date,
                 end=end_date
             ).only(
                 'id', 'subject', 'start', 'end', 'location',
-                'organizer', 'is_all_day', 'required_attendees'
+                'organizer', 'is_all_day', 'required_attendees',
+                'type', 'uid', 'original_start', '_start_timezone',
+                'legacy_free_busy_status'
             ).order_by('start')
 
             # Format events
@@ -356,7 +383,9 @@ class GetCalendarTool(BaseTool):
                     "location": safe_get(item, "location", "") or "",
                     "organizer": organizer_email,
                     "is_all_day": safe_get(item, "is_all_day", False),
-                    "attendees": attendee_emails
+                    "attendees": attendee_emails,
+                    "show_as": safe_get(item, "legacy_free_busy_status", None),
+                    **calendar_metadata(item)
                 }
                 events.append(event_data)
 
@@ -367,7 +396,8 @@ class GetCalendarTool(BaseTool):
                 events=events,
                 start_date=start_date.isoformat(),
                 end_date=end_date.isoformat(),
-                mailbox=mailbox
+                mailbox=mailbox,
+                calendar_id=selected_calendar.id
             )
 
         except Exception as e:
@@ -381,10 +411,16 @@ class UpdateAppointmentTool(BaseTool):
     def get_schema(self) -> Dict[str, Any]:
         return {
             "name": "update_appointment",
-            "description": "Update an existing calendar appointment.",
+            "description": "Update an appointment in place. Recurring items require explicit series or occurrence scope. Future-occurrences scope is unsupported.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "timezone": TIMEZONE_SCHEMA,
+                    "show_as": SHOW_AS_SCHEMA,
+                    "calendar_id": CALENDAR_ID_SCHEMA,
+                    "recurrence": RECURRENCE_SCHEMA,
+                    "scope": {"type": "string", "enum": ["single", "series", "occurrence", "future"], "description": "single defaults only for nonrecurring items; series requires master ID; occurrence requires occurrence ID or master ID plus occurrence_index; future is unsupported"},
+                    "occurrence_index": {"type": "integer", "minimum": 1, "description": "1-based occurrence index, with master ID and occurrence scope"},
                     "item_id": {
                         "type": "string",
                         "description": "Appointment item ID"
@@ -430,24 +466,63 @@ class UpdateAppointmentTool(BaseTool):
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """Update appointment."""
         item_id = kwargs.get("item_id")
+        show_as_request = self.validate_input(ShowAsRequest, **kwargs)
 
         try:
             target_mailbox = kwargs.get("target_mailbox")
             account = self.get_account(target_mailbox)
             mailbox = self.get_mailbox_info(target_mailbox)
+            selected_calendar = select_calendar(account, kwargs)
 
             # Get the appointment
-            item = account.calendar.get(id=item_id)
+            item = selected_calendar.get(id=item_id)
+            verify_item_calendar(item, selected_calendar)
+
+            scope = kwargs.get("scope", "single")
+            if scope == "future":
+                raise ValidationError("future-occurrences scope is unsupported")
+            if scope not in ("single", "series", "occurrence"):
+                raise ValidationError("Unknown calendar update scope")
+            kind = item.type
+            index = kwargs.get("occurrence_index")
+            if index is not None:
+                if scope != "occurrence" or kind != "RecurringMaster" or type(index) is not int or index < 1:
+                    raise ValidationError("occurrence_index requires a master ID, occurrence scope, and positive integer")
+                item = item.occurrence(index)
+                item.refresh()
+                verify_item_calendar(item, selected_calendar)
+                kind = item.type
+            if scope == "series" and kind != "RecurringMaster":
+                raise ValidationError("series scope requires the recurrence master ID")
+            if scope == "occurrence" and kind not in ("Occurrence", "Exception"):
+                raise ValidationError("occurrence scope requires an occurrence ID or master ID plus occurrence_index")
+            if scope == "single" and kind != "Single":
+                raise ValidationError("Recurring items require explicit series or occurrence scope")
+            if "recurrence" in kwargs and scope != "series" and kind != "Single":
+                raise ValidationError("Recurrence changes require series scope")
+            if "recurrence" in kwargs and scope == "occurrence":
+                raise ValidationError("Cannot change recurrence on one occurrence")
+            if "timezone" in kwargs and not all(key in kwargs for key in ("start_time", "end_time")):
+                raise ValidationError("timezone changes require both start_time and end_time")
+            if "recurrence" in kwargs:
+                item.recurrence = recurrence_from_input(kwargs["recurrence"])
+
+            if "show_as" in kwargs:
+                item.legacy_free_busy_status = show_as_request.show_as
 
             # Update fields
             if "subject" in kwargs:
                 item.subject = kwargs["subject"]
 
             if "start_time" in kwargs:
-                item.start = parse_datetime_tz_aware(kwargs["start_time"])
+                item.start = calendar_datetime(kwargs["start_time"], kwargs.get("timezone") or getattr(item._start_timezone or item.start.tzinfo, "key", None), match_offset="timezone" in kwargs)
+                item._start_timezone = item.start.tzinfo
+                item._meeting_timezone = None
 
             if "end_time" in kwargs:
-                item.end = parse_datetime_tz_aware(kwargs["end_time"])
+                item.end = calendar_datetime(kwargs["end_time"], kwargs.get("timezone") or getattr(item._end_timezone or item.end.tzinfo, "key", None), match_offset="timezone" in kwargs)
+                item._end_timezone = item.end.tzinfo
+                item._meeting_timezone = None
 
             if "location" in kwargs:
                 item.location = kwargs["location"]
@@ -459,20 +534,33 @@ class UpdateAppointmentTool(BaseTool):
             if "categories" in kwargs:
                 item.categories = list(kwargs["categories"] or [])
 
-            # Add inline (base64) attachments if provided
-            inline_count = attach_inline_files(item, kwargs.get("inline_attachments", []))
-            if inline_count > 0:
-                self.logger.info(f"Added {inline_count} inline (base64) attachment(s) to appointment")
+            # Compare instants; wall-clock ordering is wrong across an autumn fold.
+            start = item.start.astimezone(EWSTimeZone("UTC")) if isinstance(item.start, datetime) else item.start
+            end = item.end.astimezone(EWSTimeZone("UTC")) if isinstance(item.end, datetime) else item.end
+            if end <= start:
+                raise ValidationError("end_time must be after start_time")
 
-            # Save changes
-            item.save()
+            fields = {"subject": "subject", "start_time": "start", "end_time": "end",
+                      "location": "location", "body": "body", "categories": "categories",
+                      "recurrence": "recurrence", "show_as": "legacy_free_busy_status"}
+            changed = [field for key, field in fields.items() if key in kwargs]
+            if not changed and not kwargs.get("inline_attachments"):
+                raise ValidationError("Supply an appointment field to update")
+            inline_count = attach_inline_files(item, kwargs.get("inline_attachments", []))
+            if changed:
+                # Explicit fields avoid deleting recurrence/uid on exceptions and
+                # exchangelib 5.0.3's default occurrence field-list failure.
+                item.save(update_fields=changed)
 
             self.logger.info(f"Updated appointment {item_id}")
 
             return format_success_response(
                 "Appointment updated successfully",
-                item_id=item_id,
-                mailbox=mailbox
+                item_id=ews_id_to_str(item.id),
+                scope=scope,
+                show_as=safe_get(item, "legacy_free_busy_status", None),
+                mailbox=mailbox,
+                calendar_id=selected_calendar.id
             )
 
         except Exception as e:

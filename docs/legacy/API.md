@@ -667,3 +667,70 @@ cheaper, and produces better results than a second LLM hop:
 
 See the [v4.0.0 entry in CHANGELOG.md](../CHANGELOG.md#v400--2026-05-03)
 for the rationale and the in-prompt replacement pattern.
+
+## Calendar timezone and recurrence updates
+
+`create_appointment` and `update_appointment` accept `timezone`, an IANA name
+such as `America/New_York` or `Europe/London`. Exchange receives the named
+zone as well as the timestamp, so recurring 09:00 appointments follow local
+DST rules. Numeric offsets such as `-05:00` are not timezone names.
+
+With an explicit timezone, supply local ISO datetimes. An ISO offset, if
+included, must match that local time in that zone. A naive ambiguous time
+(for example, `2026-11-01T01:30:00` in New York) requires a matching offset
+(`-04:00` or `-05:00`) to select the occurrence of that time. Nonexistent
+local times (for example, `2026-03-08T02:30:00`) are rejected. Without an
+explicit timezone, creation uses `TIMEZONE`/`TZ` (default UTC); updates use
+the saved event zone. Offset-bearing legacy inputs without `timezone`
+continue to represent instants converted to that zone. Changing an existing
+zone requires both `start_time` and `end_time`.
+
+`get_calendar` adds `calendar_item_type` (`Single`, `RecurringMaster`,
+`Occurrence`, or `Exception`), `series_master_id`, `uid`, `original_start`,
+and `timezone`. Resolving an occurrence's master requires an extra Exchange
+lookup. Use the returned occurrence `item_id` for a single occurrence edit.
+
+`update_appointment` changes the existing item, with these scopes:
+
+| `scope` | Item selection |
+|---|---|
+| `single` (default) | A nonrecurring item only; recurring items require explicit scope |
+| `series` | Supply the recurrence master `item_id` |
+| `occurrence` | Supply an occurrence/exception `item_id`, or the master ID plus a positive, 1-based `occurrence_index` |
+| `future` | Unsupported; returns an error without saving |
+
+Creation and series updates accept a `recurrence` object. Supported patterns
+are `daily` and `weekly`; other patterns return an explicit validation error.
+Existing patterns are preserved when `recurrence` is omitted. Set it to
+`null` with series scope to remove recurrence. A single occurrence cannot
+change the series rule. Rule changes use Exchange's existing master; Exchange
+may regenerate occurrences and affect existing exceptions.
+
+```json
+{
+  "frequency": "weekly",
+  "interval": 1,
+  "weekdays": [1, 3],
+  "start": "2026-03-02",
+  "count": 12
+}
+```
+
+`weekdays` uses ISO numbers (Monday=1, Sunday=7) and is required for weekly
+patterns. `start` is a local date. Supply either `count` (1–999), `end`
+(an inclusive local date), or neither (no end). `interval` defaults to 1
+and must be 1–99. Update responses return the saved `item_id` and scope.
+
+## `update_draft`
+
+Edit an existing unsent message in place. Supply `message_id` and at least
+one of `subject`, `body`, `to`, `cc`, or `bcc`. Omitted fields are preserved;
+recipient lists replace the corresponding list, and `[]` clears it. Empty
+subject and body strings are allowed. `body_format` accepts `html` (default),
+`markdown`, or `text`. `body` replaces the full body, including quoted text.
+`target_mailbox` selects the account as on other draft tools.
+
+The update preserves attachments and stored reply context (`in_reply_to`
+and conversation properties). Sent and submitted messages are rejected.
+Saving uses Exchange `SaveOnly`; this tool never sends. The response contains
+the current `message_id`, for subsequent edits or attachment operations.

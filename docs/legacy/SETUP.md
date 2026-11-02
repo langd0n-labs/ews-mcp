@@ -187,7 +187,7 @@ your Microsoft tenant already accepts.
 
 ```bash
 EWS_AUTH_TYPE=o365devicecode
-EWS_DEVICE_CODE_CLIENT_ID=9e5f94bc-e8a4-4e73-b8be-63364c29d753
+EWS_DEVICE_CODE_CLIENT_ID=<your-client-id>
 EWS_DEVICE_CODE_AUTHORITY=https://login.microsoftonline.com/organizations
 EWS_DEVICE_CODE_TOKEN_CACHE_PATH=~/.cache/ews-mcp/msal-token-cache.json
 ```
