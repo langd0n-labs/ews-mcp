@@ -34,8 +34,8 @@ from .tools import (
     SendEmailTool, ReadEmailsTool, SearchEmailsTool, GetEmailDetailsTool, GetEmailsBulkTool,
     DeleteEmailTool, MoveEmailTool, UpdateEmailTool, CopyEmailTool,
     ReplyEmailTool, ForwardEmailTool,
-    # Calendar tools (7)
-    CreateAppointmentTool, GetCalendarTool, UpdateAppointmentTool,
+    # Calendar tools (8)
+    ListCalendarsTool, CreateAppointmentTool, GetCalendarTool, UpdateAppointmentTool,
     DeleteAppointmentTool, RespondToMeetingTool, CheckAvailabilityTool,
     FindMeetingTimesTool,
     # Contact tools (3) — search/get/resolve merged into FindPersonTool
@@ -734,7 +734,7 @@ class EWSMCPServer:
                 ReplyEmailTool,
                 ForwardEmailTool
             ])
-            self.logger.info("Email tools enabled (14 tools)")
+            self.logger.info("Email tools enabled (15 tools)")
 
         # Attachment tools (7 tools)
         if self.settings.enable_email:
@@ -749,10 +749,11 @@ class EWSMCPServer:
             ])
             self.logger.info("Attachment tools enabled (7 tools)")
 
-        # Calendar tools (7 tools)
+        # Calendar tools (8 tools)
         if self.settings.enable_calendar:
             tool_classes.extend([
                 CreateAppointmentTool,
+                ListCalendarsTool,
                 GetCalendarTool,
                 UpdateAppointmentTool,
                 DeleteAppointmentTool,
@@ -760,7 +761,7 @@ class EWSMCPServer:
                 CheckAvailabilityTool,
                 FindMeetingTimesTool
             ])
-            self.logger.info("Calendar tools enabled (7 tools)")
+            self.logger.info("Calendar tools enabled (8 tools)")
 
         # Contact tools (3 tools — search/get/resolve merged into find_person)
         if self.settings.enable_contacts:

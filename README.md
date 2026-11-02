@@ -139,3 +139,9 @@ examples/      example assistant skill
 ## Contributing & license
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). MIT — see [LICENSE](LICENSE).
+
+### Secondary Exchange calendars
+
+Use `list_calendars` to discover mailbox calendar IDs, then pass `calendar_id`
+to `get_calendar`, `create_appointment`, or `update_appointment`. Omit it to use
+the default calendar. See [calendar selection and migration](docs/secondary-calendars.md).

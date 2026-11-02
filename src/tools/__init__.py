@@ -60,9 +60,10 @@ __all__ = [
     "CopyEmailTool",
     "ReplyEmailTool",
     "ForwardEmailTool",
-    # Calendar tools (7)
+    # Calendar tools (8)
     "CreateAppointmentTool",
     "GetCalendarTool",
+    "ListCalendarsTool",
     "UpdateAppointmentTool",
     "DeleteAppointmentTool",
     "RespondToMeetingTool",
@@ -132,3 +133,5 @@ __all__ = [
     "GenerateBriefingTool",
     "PrepareMeetingTool",
 ]
+
+from .calendar_selection import ListCalendarsTool

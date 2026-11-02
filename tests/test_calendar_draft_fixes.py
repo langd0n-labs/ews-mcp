@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from exchangelib import Account, CalendarItem, Message, FileAttachment, Mailbox, HTMLBody, EWSTimeZone
 from exchangelib.folders import Calendar
+from exchangelib.properties import ParentFolderId
 from exchangelib.version import Version, EXCHANGE_2016
 from lxml import etree
 
@@ -80,7 +81,7 @@ def test_legacy_offset_is_instant_in_configured_zone(monkeypatch):
 
 
 def event(kind="Single"):
-    return CalendarItem(id="event-id", changekey="key", type=kind,
+    return CalendarItem(id="event-id", changekey="key", type=kind, parent_folder_id=ParentFolderId(id="calendar-id"),
                         start=calendar_datetime("2026-03-01T09:00:00", "America/New_York"),
                         end=calendar_datetime("2026-03-01T10:00:00", "America/New_York"),
                         _start_timezone=EWSTimeZone("America/New_York"),
@@ -110,7 +111,7 @@ def test_create_appointment_preserves_named_timezone(monkeypatch):
 @pytest.mark.parametrize("kind,scope", [("RecurringMaster", None), ("Occurrence", None), ("Exception", None), ("RecurringMaster", "occurrence"), ("Occurrence", "series"), ("Single", "future")])
 def test_rejects_unsafe_recurrence_scope(monkeypatch, kind, scope):
     item = event(kind)
-    account = SimpleNamespace(calendar=Mock(get=Mock(return_value=item)))
+    account = SimpleNamespace(calendar=Mock(id="calendar-id", get=Mock(return_value=item)))
     save = Mock()
     monkeypatch.setattr(CalendarItem, "save", save)
     kwargs = dict(item_id=item.id, subject="Changed")
@@ -123,7 +124,7 @@ def test_rejects_unsafe_recurrence_scope(monkeypatch, kind, scope):
 
 def test_series_rule_and_fields_updated_in_place(monkeypatch):
     item = event("RecurringMaster")
-    account = SimpleNamespace(calendar=Mock(get=Mock(return_value=item)))
+    account = SimpleNamespace(calendar=Mock(id="calendar-id", get=Mock(return_value=item)))
     saved = Mock()
     monkeypatch.setattr(CalendarItem, "save", saved)
     result = run(tool_instance(calendar.UpdateAppointmentTool, account), item_id=item.id, scope="series", subject="Changed",
@@ -136,7 +137,7 @@ def test_series_rule_and_fields_updated_in_place(monkeypatch):
 @pytest.mark.parametrize("kind", ["Occurrence", "Exception"])
 def test_occurrence_only_edits_selected_item(monkeypatch, kind):
     item = event(kind)
-    account = SimpleNamespace(calendar=Mock(get=Mock(return_value=item)))
+    account = SimpleNamespace(calendar=Mock(id="calendar-id", get=Mock(return_value=item)))
     saved = []
     monkeypatch.setattr(CalendarItem, "save", lambda obj, **kw: saved.append(obj))
     run(tool_instance(calendar.UpdateAppointmentTool, account), item_id=item.id, scope="occurrence", subject="One only")
@@ -156,7 +157,7 @@ def test_master_index_resolves_occurrence_before_update(monkeypatch):
     monkeypatch.setattr(CalendarItem, "refresh", refresh)
     saved = []
     monkeypatch.setattr(CalendarItem, "save", lambda obj, **kw: saved.append(obj))
-    account = SimpleNamespace(calendar=Mock(get=Mock(return_value=master)))
+    account = SimpleNamespace(calendar=Mock(id="calendar-id", get=Mock(return_value=master)))
     result = run(tool_instance(calendar.UpdateAppointmentTool, account), item_id=master.id, scope="occurrence", occurrence_index=3, subject="One")
     occurrence_method.assert_called_once_with(3)
     refresh.assert_called_once()
@@ -166,7 +167,7 @@ def test_master_index_resolves_occurrence_before_update(monkeypatch):
 
 def test_update_time_refreshes_exchange_timezone_fields(monkeypatch):
     item = event("RecurringMaster")
-    account = SimpleNamespace(calendar=Mock(get=Mock(return_value=item)))
+    account = SimpleNamespace(calendar=Mock(id="calendar-id", get=Mock(return_value=item)))
     monkeypatch.setattr(CalendarItem, "save", lambda obj, **kw: obj.clean(version=VERSION))
     run(tool_instance(calendar.UpdateAppointmentTool, account), item_id=item.id, scope="series",
         start_time="2026-11-01T09:00:00", end_time="2026-11-01T10:00:00", timezone="America/New_York")
@@ -279,7 +280,7 @@ def test_fold_interval_validation_create_and_update(monkeypatch, start, end, val
         with pytest.raises(ValueError, match="end_time must be after start_time"):
             CreateAppointmentRequest(subject="Fold", start_time=first, end_time=last)
     item = event()
-    account = SimpleNamespace(calendar=Mock(get=Mock(return_value=item)))
+    account = SimpleNamespace(calendar=Mock(id="calendar-id", get=Mock(return_value=item)))
     save = Mock()
     monkeypatch.setattr(CalendarItem, "save", save)
     kwargs = dict(item_id=item.id, start_time=start, end_time=end, timezone="America/New_York")
@@ -310,7 +311,7 @@ def test_real_calendar_save_payload_limits_fields(monkeypatch, kind):
         payloads.append(service.get_payload(**{k: v for k, v in kwargs.items() if k != "expect_result"}))
         return item.id, "new-key"
     monkeypatch.setattr(UpdateItem, "get", update)
-    account = SimpleNamespace(calendar=Mock(get=Mock(return_value=item)))
+    account = SimpleNamespace(calendar=Mock(id="calendar-id", get=Mock(return_value=item)))
     run(tool_instance(calendar.UpdateAppointmentTool, account), item_id=item.id,
         scope="series" if kind == "RecurringMaster" else "occurrence", subject="Only subject")
     xml = etree.tostring(payloads[0]).decode()
@@ -329,7 +330,7 @@ def test_real_timezone_update_payload_contains_new_named_zone(monkeypatch):
         payloads.append(service.get_payload(**{k: v for k, v in kwargs.items() if k != "expect_result"}))
         return item.id, "new-key"
     monkeypatch.setattr(UpdateItem, "get", update)
-    account = SimpleNamespace(calendar=Mock(get=Mock(return_value=item)))
+    account = SimpleNamespace(calendar=Mock(id="calendar-id", get=Mock(return_value=item)))
     run(tool_instance(calendar.UpdateAppointmentTool, account), item_id=item.id, scope="series",
         timezone="Europe/London", start_time="2026-10-25T09:00:00", end_time="2026-10-25T10:00:00")
     xml = etree.tostring(payloads[0]).decode()
@@ -361,7 +362,7 @@ def test_real_series_recurrence_update_payload(monkeypatch, rule):
         payloads.append(service.get_payload(**{k: v for k, v in kwargs.items() if k != "expect_result"}))
         return item.id, "new-key"
     monkeypatch.setattr(UpdateItem, "get", update)
-    account = SimpleNamespace(calendar=Mock(get=Mock(return_value=item)))
+    account = SimpleNamespace(calendar=Mock(id="calendar-id", get=Mock(return_value=item)))
     run(tool_instance(calendar.UpdateAppointmentTool, account), item_id=item.id, scope="series", recurrence=rule)
     xml = etree.tostring(payloads[0]).decode()
     assert 'FieldURI="calendar:Recurrence"' in xml

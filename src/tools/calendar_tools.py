@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from exchangelib import CalendarItem, Mailbox, Attendee, EWSTimeZone
 
 from .base import BaseTool
+from .calendar_selection import CALENDAR_ID_SCHEMA, select_calendar, verify_item_calendar
 from .calendar_support import (calendar_datetime, recurrence_from_input, calendar_metadata,
                                TIMEZONE_SCHEMA, RECURRENCE_SCHEMA)
 from ..models import CreateAppointmentRequest, MeetingResponse
@@ -128,6 +129,7 @@ class CreateAppointmentTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "timezone": TIMEZONE_SCHEMA,
+                    "calendar_id": CALENDAR_ID_SCHEMA,
                     "recurrence": RECURRENCE_SCHEMA,
                     "subject": {
                         "type": "string",
@@ -196,11 +198,12 @@ class CreateAppointmentTool(BaseTool):
             target_mailbox = kwargs.get("target_mailbox")
             account = self.get_account(target_mailbox)
             mailbox = self.get_mailbox_info(target_mailbox)
+            selected_calendar = select_calendar(account, kwargs)
 
             # Create calendar item
             item = CalendarItem(
                 account=account,
-                folder=account.calendar,
+                folder=selected_calendar,
                 subject=request.subject,
                 start=request.start_time,
                 end=request.end_time,
@@ -249,7 +252,8 @@ class CreateAppointmentTool(BaseTool):
                 subject=request.subject,
                 start_time=request.start_time.isoformat(),
                 end_time=request.end_time.isoformat(),
-                mailbox=mailbox
+                mailbox=mailbox,
+                calendar_id=selected_calendar.id
             )
 
         except Exception as e:
@@ -267,6 +271,7 @@ class GetCalendarTool(BaseTool):
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "calendar_id": CALENDAR_ID_SCHEMA,
                     "start_date": {
                         "type": "string",
                         "description": "Start date (ISO 8601 format, optional, defaults to today)"
@@ -302,6 +307,7 @@ class GetCalendarTool(BaseTool):
             target_mailbox = kwargs.get("target_mailbox")
             account = self.get_account(target_mailbox)
             mailbox = self.get_mailbox_info(target_mailbox)
+            selected_calendar = select_calendar(account, kwargs)
 
             # Parse dates as timezone-aware
             start_date = kwargs.get("start_date")
@@ -330,7 +336,7 @@ class GetCalendarTool(BaseTool):
             max_results = kwargs.get("max_results", 50)
 
             # Query calendar - use only() to fetch specific fields and avoid timezone parsing warnings
-            items = account.calendar.view(
+            items = selected_calendar.view(
                 start=start_date,
                 end=end_date
             ).only(
@@ -376,7 +382,8 @@ class GetCalendarTool(BaseTool):
                 events=events,
                 start_date=start_date.isoformat(),
                 end_date=end_date.isoformat(),
-                mailbox=mailbox
+                mailbox=mailbox,
+                calendar_id=selected_calendar.id
             )
 
         except Exception as e:
@@ -395,6 +402,7 @@ class UpdateAppointmentTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "timezone": TIMEZONE_SCHEMA,
+                    "calendar_id": CALENDAR_ID_SCHEMA,
                     "recurrence": RECURRENCE_SCHEMA,
                     "scope": {"type": "string", "enum": ["single", "series", "occurrence", "future"], "description": "single defaults only for nonrecurring items; series requires master ID; occurrence requires occurrence ID or master ID plus occurrence_index; future is unsupported"},
                     "occurrence_index": {"type": "integer", "minimum": 1, "description": "1-based occurrence index, with master ID and occurrence scope"},
@@ -448,9 +456,11 @@ class UpdateAppointmentTool(BaseTool):
             target_mailbox = kwargs.get("target_mailbox")
             account = self.get_account(target_mailbox)
             mailbox = self.get_mailbox_info(target_mailbox)
+            selected_calendar = select_calendar(account, kwargs)
 
             # Get the appointment
-            item = account.calendar.get(id=item_id)
+            item = selected_calendar.get(id=item_id)
+            verify_item_calendar(item, selected_calendar)
 
             scope = kwargs.get("scope", "single")
             if scope == "future":
@@ -464,6 +474,7 @@ class UpdateAppointmentTool(BaseTool):
                     raise ValidationError("occurrence_index requires a master ID, occurrence scope, and positive integer")
                 item = item.occurrence(index)
                 item.refresh()
+                verify_item_calendar(item, selected_calendar)
                 kind = item.type
             if scope == "series" and kind != "RecurringMaster":
                 raise ValidationError("series scope requires the recurrence master ID")
@@ -528,7 +539,8 @@ class UpdateAppointmentTool(BaseTool):
                 "Appointment updated successfully",
                 item_id=ews_id_to_str(item.id),
                 scope=scope,
-                mailbox=mailbox
+                mailbox=mailbox,
+                calendar_id=selected_calendar.id
             )
 
         except Exception as e:
