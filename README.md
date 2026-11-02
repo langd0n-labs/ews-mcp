@@ -85,6 +85,10 @@ and health at `/livez` `/readyz` `/health`. Legacy transport docs:
 - **Operate** — `get_server_status` (connection, tier, cache watermarks —
   works even while Exchange is unreachable).
 
+Calendar tools `create_appointment` and `update_appointment` accept optional
+`show_as`: `Free`, `Tentative`, `Busy`, `OOF`, or `WorkingElsewhere`.
+`get_calendar` returns each event's `show_as` status.
+
 The complete, generated reference — every tool with its parameters,
 envelope, error codes, and the v3→4.5 rename map — is
 [`v5/docs/API.md`](v5/docs/API.md).

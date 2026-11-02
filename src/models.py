@@ -126,7 +126,14 @@ class EmailDetails(BaseModel):
 
 
 # Calendar Models
-class CreateAppointmentRequest(BaseModel):
+class ShowAsRequest(BaseModel):
+    """Optional calendar free/busy input; explicit null is invalid."""
+    show_as: Literal["Free", "Tentative", "Busy", "OOF", "WorkingElsewhere"] = Field(
+        default=None, description="Free/busy status shown for this event (Outlook 'Show as')."
+    )
+
+
+class CreateAppointmentRequest(ShowAsRequest):
     """Request model for creating appointment."""
     subject: str = Field(..., min_length=1, description="Appointment subject")
     start_time: datetime = Field(..., description="Start time")

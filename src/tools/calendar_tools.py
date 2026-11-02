@@ -9,7 +9,7 @@ from .base import BaseTool
 from .calendar_selection import CALENDAR_ID_SCHEMA, select_calendar, verify_item_calendar
 from .calendar_support import (calendar_datetime, recurrence_from_input, calendar_metadata,
                                TIMEZONE_SCHEMA, RECURRENCE_SCHEMA)
-from ..models import CreateAppointmentRequest, MeetingResponse
+from ..models import CreateAppointmentRequest, MeetingResponse, ShowAsRequest
 from ..exceptions import ToolExecutionError, ValidationError
 from ..utils import format_success_response, safe_get, parse_datetime_tz_aware, make_tz_aware, format_datetime, ews_id_to_str, attach_inline_files, INLINE_ATTACHMENTS_SCHEMA, get_timezone as get_configured_timezone
 
@@ -118,6 +118,13 @@ def summarize_availability(merged_free_busy, calendar_events):
     }
 
 
+SHOW_AS_SCHEMA = {
+    "type": "string",
+    "enum": ["Free", "Tentative", "Busy", "OOF", "WorkingElsewhere"],
+    "description": "Free/busy status shown for this event (Outlook 'Show as').",
+}
+
+
 class CreateAppointmentTool(BaseTool):
     """Tool for creating calendar appointments."""
 
@@ -129,6 +136,7 @@ class CreateAppointmentTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "timezone": TIMEZONE_SCHEMA,
+                    "show_as": SHOW_AS_SCHEMA,
                     "calendar_id": CALENDAR_ID_SCHEMA,
                     "recurrence": RECURRENCE_SCHEMA,
                     "subject": {
@@ -213,6 +221,9 @@ class CreateAppointmentTool(BaseTool):
             if "recurrence" in kwargs:
                 item.recurrence = recurrence_from_input(kwargs["recurrence"])
 
+            if "show_as" in kwargs:
+                item.legacy_free_busy_status = request.show_as
+
             # Set optional fields
             if request.location:
                 item.location = request.location
@@ -253,7 +264,8 @@ class CreateAppointmentTool(BaseTool):
                 start_time=request.start_time.isoformat(),
                 end_time=request.end_time.isoformat(),
                 mailbox=mailbox,
-                calendar_id=selected_calendar.id
+                calendar_id=selected_calendar.id,
+                show_as=safe_get(item, "legacy_free_busy_status", None)
             )
 
         except Exception as e:
@@ -342,7 +354,8 @@ class GetCalendarTool(BaseTool):
             ).only(
                 'id', 'subject', 'start', 'end', 'location',
                 'organizer', 'is_all_day', 'required_attendees',
-                'type', 'uid', 'original_start', '_start_timezone'
+                'type', 'uid', 'original_start', '_start_timezone',
+                'legacy_free_busy_status'
             ).order_by('start')
 
             # Format events
@@ -371,6 +384,7 @@ class GetCalendarTool(BaseTool):
                     "organizer": organizer_email,
                     "is_all_day": safe_get(item, "is_all_day", False),
                     "attendees": attendee_emails,
+                    "show_as": safe_get(item, "legacy_free_busy_status", None),
                     **calendar_metadata(item)
                 }
                 events.append(event_data)
@@ -402,6 +416,7 @@ class UpdateAppointmentTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "timezone": TIMEZONE_SCHEMA,
+                    "show_as": SHOW_AS_SCHEMA,
                     "calendar_id": CALENDAR_ID_SCHEMA,
                     "recurrence": RECURRENCE_SCHEMA,
                     "scope": {"type": "string", "enum": ["single", "series", "occurrence", "future"], "description": "single defaults only for nonrecurring items; series requires master ID; occurrence requires occurrence ID or master ID plus occurrence_index; future is unsupported"},
@@ -451,6 +466,7 @@ class UpdateAppointmentTool(BaseTool):
     async def execute(self, **kwargs) -> Dict[str, Any]:
         """Update appointment."""
         item_id = kwargs.get("item_id")
+        show_as_request = self.validate_input(ShowAsRequest, **kwargs)
 
         try:
             target_mailbox = kwargs.get("target_mailbox")
@@ -491,6 +507,9 @@ class UpdateAppointmentTool(BaseTool):
             if "recurrence" in kwargs:
                 item.recurrence = recurrence_from_input(kwargs["recurrence"])
 
+            if "show_as" in kwargs:
+                item.legacy_free_busy_status = show_as_request.show_as
+
             # Update fields
             if "subject" in kwargs:
                 item.subject = kwargs["subject"]
@@ -523,7 +542,7 @@ class UpdateAppointmentTool(BaseTool):
 
             fields = {"subject": "subject", "start_time": "start", "end_time": "end",
                       "location": "location", "body": "body", "categories": "categories",
-                      "recurrence": "recurrence"}
+                      "recurrence": "recurrence", "show_as": "legacy_free_busy_status"}
             changed = [field for key, field in fields.items() if key in kwargs]
             if not changed and not kwargs.get("inline_attachments"):
                 raise ValidationError("Supply an appointment field to update")
@@ -539,6 +558,7 @@ class UpdateAppointmentTool(BaseTool):
                 "Appointment updated successfully",
                 item_id=ews_id_to_str(item.id),
                 scope=scope,
+                show_as=safe_get(item, "legacy_free_busy_status", None),
                 mailbox=mailbox,
                 calendar_id=selected_calendar.id
             )
