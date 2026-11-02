@@ -44,17 +44,17 @@ def get_timezone():
     return None
 
 
-def format_free_busy_datetime(dt):
-    """Format free/busy datetimes in the configured local timezone.
+def format_free_busy_datetime(dt, display_timezone=None):
+    """Format UTC-request free/busy times with the caller's offset.
 
-    Exchange free/busy responses may contain naive UTC datetimes. Convert those
-    explicitly so user-facing output matches the requested mailbox timezone.
+    Naive response times use the UTC zone sent in the free/busy request.
+    Fall back to the configured timezone when no display zone is supplied.
     """
     if dt is None:
         return None
     if getattr(dt, "tzinfo", None) is None:
         dt = dt.replace(tzinfo=EWSTimeZone("UTC"))
-    return dt.astimezone(get_configured_timezone()).isoformat()
+    return dt.astimezone(display_timezone or get_configured_timezone()).isoformat()
 
 
 FREE_BUSY_LABELS = {
@@ -63,6 +63,7 @@ FREE_BUSY_LABELS = {
     "2": "Busy",
     "3": "OutOfOffice",
     "4": "NoData",
+    "5": "WorkingElsewhere",
 }
 
 
@@ -100,7 +101,7 @@ def summarize_availability(merged_free_busy, calendar_events):
         primary = "busy"
     elif "4" in codes:
         primary = "no_data"
-    elif "WorkingElsewhere" in busy_types:
+    elif "5" in codes or "WorkingElsewhere" in busy_types:
         primary = "working_elsewhere"
     elif "1" in codes:
         primary = "tentative"
@@ -114,7 +115,7 @@ def summarize_availability(merged_free_busy, calendar_events):
         "has_tentative": "1" in codes,
         "has_out_of_office": "3" in codes,
         "has_no_data": "4" in codes,
-        "has_working_elsewhere": "WorkingElsewhere" in busy_types,
+        "has_working_elsewhere": "5" in codes or "WorkingElsewhere" in busy_types,
     }
 
 
@@ -819,8 +820,9 @@ class CheckAvailabilityTool(BaseTool):
             free_busy_accounts = build_free_busy_accounts(normalized_emails)
             availability_data = list(account.protocol.get_free_busy_info(
                 accounts=free_busy_accounts,
-                start=start_time,
-                end=end_time,
+                # Match the request TimeZone to the UTC time window and response.
+                start=start_time.astimezone(EWSTimeZone("UTC")),
+                end=end_time.astimezone(EWSTimeZone("UTC")),
                 merged_free_busy_interval=interval_minutes
             ))
 
@@ -840,8 +842,8 @@ class CheckAvailabilityTool(BaseTool):
                 if calendar_events:
                     for event in calendar_events:
                         result["calendar_events"].append({
-                            "start": format_free_busy_datetime(event.start) if hasattr(event, 'start') else None,
-                            "end": format_free_busy_datetime(event.end) if hasattr(event, 'end') else None,
+                            "start": format_free_busy_datetime(event.start, display_start_time.tzinfo) if hasattr(event, 'start') else None,
+                            "end": format_free_busy_datetime(event.end, display_start_time.tzinfo) if hasattr(event, 'end') else None,
                             "busy_type": str(event.busy_type) if hasattr(event, 'busy_type') else "Busy",
                             "details": safe_get(event, 'details')
                         })
@@ -951,6 +953,7 @@ class FindMeetingTimesTool(BaseTool):
                         "type": "object",
                         "description": "Scheduling preferences",
                         "properties": {
+                            "allow_tentative": {"type": "boolean", "default": True, "description": "Allow slots that overlap tentative time. Fully free slots score higher."},
                             "prefer_morning": {"type": "boolean", "default": False},
                             "prefer_afternoon": {"type": "boolean", "default": False},
                             "avoid_back_to_back": {"type": "boolean", "default": True},
@@ -1003,6 +1006,7 @@ class FindMeetingTimesTool(BaseTool):
                 raise ToolExecutionError("date_range_end must be after date_range_start")
 
             # Extract preferences
+            allow_tentative = preferences.get("allow_tentative", True)
             prefer_morning = preferences.get("prefer_morning", False)
             prefer_afternoon = preferences.get("prefer_afternoon", False)
             avoid_back_to_back = preferences.get("avoid_back_to_back", True)
@@ -1014,8 +1018,8 @@ class FindMeetingTimesTool(BaseTool):
             free_busy_accounts = build_free_busy_accounts(attendees)
             availability_data = list(account.protocol.get_free_busy_info(
                 accounts=free_busy_accounts,
-                start=start_date,
-                end=end_date,
+                start=start_date.astimezone(EWSTimeZone("UTC")),
+                end=end_date.astimezone(EWSTimeZone("UTC")),
                 merged_free_busy_interval=15  # 15-minute intervals
             ))
 
@@ -1036,7 +1040,10 @@ class FindMeetingTimesTool(BaseTool):
             suggestions = []
             current_time = start_date
 
-            while current_time < end_date and len(suggestions) < max_suggestions:
+            # Collect candidates across the range before ranking, so a later
+            # fully free slot can outrank an earlier tentative one.
+            max_candidates = 200
+            while current_time < end_date and len(suggestions) < max_candidates:
                 # Skip to next day boundary if we're past working hours
                 if working_hours_only:
                     if current_time.hour < earliest_hour:
@@ -1062,6 +1069,7 @@ class FindMeetingTimesTool(BaseTool):
                 # never surface a slot we couldn't actually verify.
                 all_available = True
                 buffer_available = True
+                includes_tentative = False
                 for busy_info in availability_data:
                     # exchangelib's FreeBusyView exposes `.merged`; older code
                     # in this file (and some external references) used the
@@ -1083,10 +1091,12 @@ class FindMeetingTimesTool(BaseTool):
 
                     for i in range(intervals_needed):
                         status = merged[interval_index + i]
-                        # 0=Free, 1=Tentative, 2=Busy, 3=OOF, 4=NoData
-                        if status in ('2', '3', '4'):
+                        # 0=Free, 1=Tentative, 2=Busy, 3=OOF, 4=NoData, 5=WorkingElsewhere
+                        if status not in ({"0", "1", "5"} if allow_tentative else {"0", "5"}):
                             all_available = False
                             break
+                        if status == "1":
+                            includes_tentative = True
 
                     if not all_available:
                         break
@@ -1115,11 +1125,16 @@ class FindMeetingTimesTool(BaseTool):
                     if avoid_back_to_back and buffer_available:
                         score += 10
 
+                    # Rank fully free slots above slots that overlap tentative time.
+                    if includes_tentative:
+                        score -= 25
+
                     suggestions.append({
                         "start_time": format_datetime(current_time),
                         "end_time": format_datetime(slot_end),
                         "duration_minutes": duration_minutes,
                         "score": score,
+                        "includes_tentative": includes_tentative,
                         "day_of_week": current_time.strftime("%A"),
                         "time_of_day": "Morning" if current_time.hour < 12 else "Afternoon" if current_time.hour < 17 else "Evening"
                     })
@@ -1135,7 +1150,7 @@ class FindMeetingTimesTool(BaseTool):
                     # Keep scanning in 15-minute steps.
                     current_time += timedelta(minutes=15)
 
-            # Sort suggestions by score (highest first)
+            # Sort suggestions by score (highest first); ties keep time order.
             suggestions.sort(key=lambda x: x['score'], reverse=True)
 
             # Limit to max_suggestions
