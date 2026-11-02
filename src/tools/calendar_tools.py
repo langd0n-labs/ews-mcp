@@ -962,7 +962,7 @@ class FindMeetingTimesTool(BaseTool):
                         "type": "object",
                         "description": "Scheduling preferences",
                         "properties": {
-                            "allow_tentative": {"type": "boolean", "default": True, "description": "Allow slots that overlap tentative time. Fully free slots score higher."},
+                            "allow_tentative": {"type": "boolean", "default": True, "description": "Allow slots that overlap tentative time. Fully free slots are listed first; includes_tentative marks the others."},
                             "prefer_morning": {"type": "boolean", "default": False},
                             "prefer_afternoon": {"type": "boolean", "default": False},
                             "avoid_back_to_back": {"type": "boolean", "default": True},
@@ -1053,6 +1053,9 @@ class FindMeetingTimesTool(BaseTool):
             # The merged string counts real elapsed time from the request
             # start. Index it from UTC instants, not wall-clock differences.
             start_utc = start_date.astimezone(EWSTimeZone("UTC"))
+            # End of the last tentative suggestion. A later tentative slot
+            # that starts before it is a near-duplicate and is not listed.
+            tentative_until = None
 
             # Collect candidates across the whole range before ranking, so a
             # later fully free slot can outrank an earlier tentative one.
@@ -1126,7 +1129,13 @@ class FindMeetingTimesTool(BaseTool):
                                 buffer_available = False
                                 break
 
+                if all_available and includes_tentative and tentative_until and current_time < tentative_until:
+                    current_time = add_elapsed_minutes(current_time, 15)
+                    continue
+
                 if all_available:
+                    if includes_tentative:
+                        tentative_until = slot_end
                     score = 100
 
                     if prefer_morning and current_time.hour < 12:
@@ -1139,7 +1148,6 @@ class FindMeetingTimesTool(BaseTool):
 
                     if avoid_back_to_back and buffer_available:
                         score += 10
-
 
                     suggestions.append({
                         "start_time": format_datetime(current_time),

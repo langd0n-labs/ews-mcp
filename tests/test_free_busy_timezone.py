@@ -165,3 +165,15 @@ def test_allow_tentative_must_be_boolean():
         run(tool, attendees=["user@example.com"], duration_minutes=60,
             date_range_start=START, date_range_end=END,
             preferences={"allow_tentative": "false"})
+
+
+def test_long_tentative_block_gives_no_overlapping_suggestions():
+    # Three hours of tentative time, no free time.
+    tool, _ = make_tool(calendar.FindMeetingTimesTool, "1" * 12)
+    result = run(tool, attendees=["user@example.com"], duration_minutes=60,
+                 date_range_start=START, date_range_end="2026-11-02T20:00:00-05:00",
+                 max_suggestions=10,
+                 preferences={"working_hours_only": False, "avoid_back_to_back": False})
+    starts = [s["start_time"] for s in result["suggestions"]]
+    assert starts == ["2026-11-02T17:00:00-05:00", "2026-11-02T18:00:00-05:00",
+                      "2026-11-02T19:00:00-05:00"]
