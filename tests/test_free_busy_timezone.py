@@ -108,3 +108,60 @@ def test_fully_free_slot_outranks_earlier_tentative_slot():
     best = result["suggestions"][0]
     assert best["start_time"] == "2026-11-02T18:00:00-05:00"
     assert best["includes_tentative"] is False
+
+
+def test_fully_free_slot_outranks_tentative_slot_with_preference_bonus():
+    # 09:00-10:00 tentative (morning bonus), 17:00-18:00 free (evening penalty).
+    merged = "1111" + "0" * 28 + "0000"
+    tool, _ = make_tool(calendar.FindMeetingTimesTool, merged)
+    result = run(tool, attendees=["user@example.com"], duration_minutes=60,
+                 date_range_start="2026-11-02T09:00:00-05:00",
+                 date_range_end="2026-11-02T18:00:00-05:00",
+                 preferences={"working_hours_only": False, "avoid_back_to_back": True,
+                              "prefer_morning": True})
+    flags = [s["includes_tentative"] for s in result["suggestions"]]
+    assert flags == sorted(flags)
+    assert result["suggestions"][0]["includes_tentative"] is False
+
+
+def test_free_slot_inside_tentative_slot_is_still_offered():
+    # Only 17:00-17:15 is tentative; 17:15-18:15 is fully free.
+    tool, _ = make_tool(calendar.FindMeetingTimesTool, "1" + "0" * 7)
+    result = run(tool, attendees=["user@example.com"], duration_minutes=60,
+                 date_range_start=START, date_range_end="2026-11-02T19:00:00-05:00",
+                 max_suggestions=1,
+                 preferences={"working_hours_only": False, "avoid_back_to_back": True})
+    best = result["suggestions"][0]
+    assert best["start_time"] == "2026-11-02T17:15:00-05:00"
+    assert best["includes_tentative"] is False
+
+
+def test_meeting_times_index_across_dst_change():
+    # US DST ends 2026-11-01 02:00 EDT. The local day 00:00-06:00 is 7 hours.
+    # Busy for the first 4 real hours (16 intervals), then free.
+    merged = "2" * 16 + "0" * 12
+    tool, _ = make_tool(calendar.FindMeetingTimesTool, merged)
+    result = run(tool, attendees=["user@example.com"], duration_minutes=60,
+                 date_range_start="2026-11-01T00:00:00-04:00",
+                 date_range_end="2026-11-01T06:00:00-05:00", max_suggestions=1,
+                 preferences={"working_hours_only": False, "avoid_back_to_back": False})
+    # Four real hours after 00:00 EDT is 03:00 EST.
+    assert result["suggestions"][0]["start_time"] == "2026-11-01T03:00:00-05:00"
+
+
+def test_aware_utc_response_time_is_shown_with_caller_offset():
+    event = NS(start=EWSDateTime(2026, 11, 2, 22, tzinfo=EWSTimeZone("UTC")),
+               end=EWSDateTime(2026, 11, 2, 23, tzinfo=EWSTimeZone("UTC")),
+               busy_type="Busy", details=None)
+    tool, _ = make_tool(calendar.CheckAvailabilityTool, "2", [event])
+    result = run(tool, email_addresses=["user@example.com"],
+                 start_time=START, end_time=END, interval_minutes=60)
+    assert result["availability"][0]["calendar_events"][0]["start"] == START
+
+
+def test_allow_tentative_must_be_boolean():
+    tool, _ = make_tool(calendar.FindMeetingTimesTool, "0000")
+    with pytest.raises(Exception):
+        run(tool, attendees=["user@example.com"], duration_minutes=60,
+            date_range_start=START, date_range_end=END,
+            preferences={"allow_tentative": "false"})

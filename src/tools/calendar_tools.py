@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any, Dict, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from exchangelib import CalendarItem, Mailbox, Attendee, EWSTimeZone
 
 from .base import BaseTool
@@ -44,6 +44,12 @@ def get_timezone():
     return None
 
 
+def add_elapsed_minutes(dt, minutes):
+    """Add real elapsed minutes, so a DST change does not shift the result."""
+    utc = EWSTimeZone("UTC")
+    return (dt.astimezone(utc) + timedelta(minutes=minutes)).astimezone(dt.tzinfo)
+
+
 def format_free_busy_datetime(dt, display_timezone=None):
     """Format UTC-request free/busy times with the caller's offset.
 
@@ -52,8 +58,11 @@ def format_free_busy_datetime(dt, display_timezone=None):
     """
     if dt is None:
         return None
-    if getattr(dt, "tzinfo", None) is None:
-        dt = dt.replace(tzinfo=EWSTimeZone("UTC"))
+    # Use a plain datetime: EWSDateTime.astimezone accepts only EWSTimeZone,
+    # and the caller's zone can be a fixed offset.
+    dt = datetime.fromisoformat(dt.isoformat())
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(display_timezone or get_configured_timezone()).isoformat()
 
 
@@ -1007,6 +1016,8 @@ class FindMeetingTimesTool(BaseTool):
 
             # Extract preferences
             allow_tentative = preferences.get("allow_tentative", True)
+            if not isinstance(allow_tentative, bool):
+                raise ToolExecutionError("preferences.allow_tentative must be a boolean")
             prefer_morning = preferences.get("prefer_morning", False)
             prefer_afternoon = preferences.get("prefer_afternoon", False)
             avoid_back_to_back = preferences.get("avoid_back_to_back", True)
@@ -1039,11 +1050,13 @@ class FindMeetingTimesTool(BaseTool):
             # Analyze availability and find open slots
             suggestions = []
             current_time = start_date
+            # The merged string counts real elapsed time from the request
+            # start. Index it from UTC instants, not wall-clock differences.
+            start_utc = start_date.astimezone(EWSTimeZone("UTC"))
 
-            # Collect candidates across the range before ranking, so a later
-            # fully free slot can outrank an earlier tentative one.
-            max_candidates = 200
-            while current_time < end_date and len(suggestions) < max_candidates:
+            # Collect candidates across the whole range before ranking, so a
+            # later fully free slot can outrank an earlier tentative one.
+            while current_time < end_date:
                 # Skip to next day boundary if we're past working hours
                 if working_hours_only:
                     if current_time.hour < earliest_hour:
@@ -1053,7 +1066,7 @@ class FindMeetingTimesTool(BaseTool):
                         continue
 
                 # Check if this time slot works for all attendees
-                slot_end = current_time + timedelta(minutes=duration_minutes)
+                slot_end = add_elapsed_minutes(current_time, duration_minutes)
 
                 # Make sure we don't go past end_date or working hours
                 if slot_end > end_date:
@@ -1080,7 +1093,9 @@ class FindMeetingTimesTool(BaseTool):
                         all_available = False
                         break
 
-                    minutes_from_start = int((current_time - start_date).total_seconds() / 60)
+                    minutes_from_start = int(
+                        (current_time.astimezone(EWSTimeZone("UTC")) - start_utc).total_seconds() / 60
+                    )
                     interval_index = minutes_from_start // 15
                     intervals_needed = (duration_minutes + 14) // 15  # Round up
 
@@ -1125,9 +1140,6 @@ class FindMeetingTimesTool(BaseTool):
                     if avoid_back_to_back and buffer_available:
                         score += 10
 
-                    # Rank fully free slots above slots that overlap tentative time.
-                    if includes_tentative:
-                        score -= 25
 
                     suggestions.append({
                         "start_time": format_datetime(current_time),
@@ -1139,19 +1151,22 @@ class FindMeetingTimesTool(BaseTool):
                         "time_of_day": "Morning" if current_time.hour < 12 else "Afternoon" if current_time.hour < 17 else "Evening"
                     })
 
-                    # Advance past the accepted slot (plus buffer) so we don't
+                    # Advance past a fully free slot (plus buffer) so we don't
                     # emit N overlapping suggestions at 15-minute offsets of
-                    # the same hour.
-                    advance = timedelta(
-                        minutes=duration_minutes + (min_break_minutes if avoid_back_to_back else 0)
-                    )
-                    current_time = current_time + advance
+                    # the same hour. After a tentative slot, step 15 minutes,
+                    # so a fully free slot that starts inside it is still seen.
+                    if includes_tentative:
+                        advance = 15
+                    else:
+                        advance = duration_minutes + (min_break_minutes if avoid_back_to_back else 0)
+                    current_time = add_elapsed_minutes(current_time, advance)
                 else:
                     # Keep scanning in 15-minute steps.
-                    current_time += timedelta(minutes=15)
+                    current_time = add_elapsed_minutes(current_time, 15)
 
-            # Sort suggestions by score (highest first); ties keep time order.
-            suggestions.sort(key=lambda x: x['score'], reverse=True)
+            # Fully free slots first, then by score (highest first); ties keep
+            # time order.
+            suggestions.sort(key=lambda x: (x['includes_tentative'], -x['score']))
 
             # Limit to max_suggestions
             suggestions = suggestions[:max_suggestions]
